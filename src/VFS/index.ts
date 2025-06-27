@@ -242,14 +242,6 @@ export class VFS {
                 return { name, type: inode.type, id: inode.id };
             });
 
-
-        // vfs.mkdir("/testdir");
-        // vfs.open("/testdir/file1.txt", "w");
-        // vfs.open("/testdir/file2.txt", "w");
-
-        // const files = vfs.ls("/testdir");
-        // return right now: 3 elements the testdir itself is included is this good. I dont see the point in it.
-
     }
 
 }
