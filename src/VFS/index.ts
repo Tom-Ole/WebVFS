@@ -1,0 +1,1 @@
+export type InodeType = "file" | "dir" | "symlink";
