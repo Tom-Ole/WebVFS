@@ -1,13 +1,14 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { VFS } from "../VFS";       // adjust relative path to where your class lives
+import { MemoryDriver } from "../StorageDriver";
 
 describe("VFS", () => {
     let vfs: VFS;
     const enc = new TextEncoder();
     const dec = new TextDecoder();
 
-    beforeEach(() => {
-        vfs = new VFS();               // fresh FS for every test
+    beforeEach(async () => {
+        vfs = await VFS.create();               // fresh FS for every test
     });
 
     /* ------------------------------------------------------------------ *
@@ -79,6 +80,7 @@ describe("VFS", () => {
         expect(files[2].type).toBe("file");
     });
 
+
     /* ------------------------------------------------------------------ *
      * Error cases
      * ------------------------------------------------------------------ */
@@ -96,3 +98,42 @@ describe("VFS", () => {
 });
 
 
+describe("MemoryDriver persistence within one tab", () => {
+    it("persists data between VFS instances that share the same driver object", async () => {
+        /* ------------------ 1. boot first FS & mutate ------------------ */
+        const driver = new MemoryDriver();         // ONE shared instance
+        const vfsA = await VFS.create(driver);
+
+        vfsA.mkdir("/docs");
+        const fd = vfsA.open("/docs/readme.md", "w");
+        vfsA.write(fd, new TextEncoder().encode("hello"));
+        vfsA.close(fd);
+
+        // Force an explicit flush so we know the driver has the snapshot.
+        await vfsA.sync?.();                       // or await (vfsA as any).flush()
+
+        /* ------------------ 2. boot second FS from same driver --------- */
+        const vfsB = await VFS.create(driver);     // same driver instance!
+
+        // read back the file that vfsA created
+        const fd2 = vfsB.open("/docs/readme.md", "r");
+        const bytes = vfsB.read(fd2, 100);
+        vfsB.close(fd2);
+
+        expect(new TextDecoder().decode(bytes)).toBe("hello");
+    });
+
+    it("does NOT persist when each VFS gets its own MemoryDriver", async () => {
+        const vfs1 = await VFS.create(new MemoryDriver());
+        vfs1.mkdir("/tmp");
+        await vfs1.sync?.();
+
+        // brand-new driver => fresh, empty FS
+        const vfs2 = await VFS.create(new MemoryDriver());
+
+        // Instead of expecting an error, check target is undefined
+        const { target } = vfs2.resolve("/tmp");
+        expect(target).toBeUndefined();
+    });
+
+});

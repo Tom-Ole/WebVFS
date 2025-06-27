@@ -1,3 +1,4 @@
+import { MemoryDriver, type StorageDriver } from "../StorageDriver";
 
 
 export type InodeType = "file" | "dir" | "symlink";
@@ -38,17 +39,44 @@ export interface FileHandle {
 
 export class VFS {
 
-    private inodes = new Map<number, Inode>();
+    private inodes = new Map<number, Inode>(); // inodeId -> Inode
     private dirs = new Map<number, Map<string, number>>();  // dirId -> Map<name, inodeId>
     private nextInodeId = 2;  // Simple counter for inode IDs - 0 as invalid, inode 1 as "/"
 
     private nextFd = 3 // reserved for stdin, stdout, stderr
-    private handles = new Map<number, FileHandle>();
+    private handles = new Map<number, FileHandle>(); // fd -> FileHandle
 
     private cwdId = 1; // Current working directory inode ID, starts at root "/"
 
+    private driver: StorageDriver; // Storage driver for loading and saving the filesystem snapshot
 
-    constructor() {
+    private dirtyInodes: Set<number> = new Set(); // Set of dirty inode IDs that need to be flushed
+    private dirtyDirs: Set<number> = new Set(); // Set of dirty directory IDs that need to be flushed
+
+
+    constructor(driver: StorageDriver = new MemoryDriver()) {
+        this.driver = driver;
+    }
+
+    /**
+     * Create a new VFS instance with an optional storage driver.
+     * 
+     * @param driver Storage driver to use for loading and saving the filesystem snapshot.
+     * If not provided, defaults to an in-memory driver.
+     * @returns 
+     */
+    static async create(driver = new MemoryDriver()) {
+        const vfs = new VFS(driver);
+        await vfs.bootstrap();
+        if (!vfs.inodes.has(1)) vfs.initRoot();     // only if snapshot empty
+        return vfs;
+    }
+
+    /**
+     * Initialize the root directory inode and its entry in the directory map.
+     * This is called only if the filesystem snapshot is empty.
+     */
+    private initRoot() {
         const root: Inode = {
             id: 1,
             type: "dir",
@@ -67,10 +95,108 @@ export class VFS {
         this.dirs.set(root.id, new Map<string, number>()); // Initialize root directory with an empty map
     }
 
+    /**
+    * Bootstrap the VFS by loading the filesystem snapshot from the driver.
+    * If the snapshot is empty, it initializes the root directory.
+    *
+    */
+    private async bootstrap(): Promise<void> {
+        const snap = await this.driver.loadFS();
+
+        if (Object.keys(snap.inodes).length) {
+            // restore
+            this.inodes = new Map(Object.entries(snap.inodes).map(([inodeId, inode]) => [Number(inodeId), inode]));
+            this.dirs = new Map(
+                Object.entries(snap.dirs).map(([dirId, entires]) => [Number(dirId), new Map(Object.entries(entires))])
+            );
+
+            this.nextInodeId = Math.max(...this.inodes.keys()) + 1;
+        } else {
+            // first boot: create /
+            const now = Date.now();
+            const root: Inode = {
+                id: 1, type: "dir", name: "/", parent: 0,
+                mode: 0o755, uid: 0, gid: 0,
+                ctime: now, mtime: now, atime: now,
+                size: 0, links: 2
+            };
+            this.inodes.set(1, root);
+            this.dirs.set(1, new Map());
+            this.nextInodeId = 2;
+            await this.flush();                      // persist clean snapshot
+        }
+    }
+
+
+    /**
+     * Mark an inode as dirty.
+     * * This method adds the inode ID to the dirty set, which will be flushed later.
+     * * This is used to track changes to inodes that need to be persisted.
+     * 
+     * @param id - The inode ID to mark as dirty
+     */
+    private markDirtyInode(id: number) { this.dirtyInodes.add(id); }
+
+    /**
+     * Mark a directory as dirty.
+     * * This method adds the directory ID to the dirty set, which will be flushed later.
+     * * This is used to track changes to directories that need to be persisted.
+     * 
+     * @param id - The directory ID to mark as dirty
+     */
+    private markDirtyDir(id: number) { this.dirtyDirs.add(id); }
+
+
+    /**
+     * Flush all dirty inodes and directories to the storage driver.
+     * * This method collects all dirty inodes and directories,
+     * * serializes them into a snapshot, and sends it to the driver.
+     * * It clears the dirty sets after flushing.
+     * 
+     * @returns {Promise<void>} - A promise that resolves when the flush is complete
+     */
+    private async flush() {
+        if (!this.dirtyInodes.size && !this.dirtyDirs.size) return;
+
+        const inodesObj: Record<number, Inode> = {};
+        this.dirtyInodes.forEach(id => (inodesObj[id] = this.inodes.get(id)!));
+
+        const dirsObj: Record<number, Record<string, number>> = {};
+        this.dirtyDirs.forEach(id => (dirsObj[id] = Object.fromEntries(this.dirs.get(id)!)));
+
+        await this.driver.flushDelta({
+            fullSnapshot: {           // could skip if driver only needs delta
+                inodes: Object.fromEntries(this.inodes),
+                dirs: Object.fromEntries([...this.dirs].map(([k, v]) => [k, Object.fromEntries(v)]))
+            },
+            changes: { inodes: inodesObj, dirs: dirsObj }
+        });
+        this.dirtyInodes.clear();
+        this.dirtyDirs.clear();
+    }
+
+    /**
+     * Synchronizes the filesystem state with the storage driver.
+     */
+    async sync() {
+        await this.flush(); // Ensure all changes are flushed to the storage driver
+    }
+
+    /**
+     * Gets an inode by its ID.
+     * 
+     * @param {number} id - The inode ID to retrieve
+     */
     private getInode(id: number): Inode {
         return this.inodes.get(id)!
     }
 
+    /**
+     * Finds a child inode by name in a given directory.
+     * 
+     * @param {number} dirId - The ID of the directory to search in
+     * @param {string} name - The name of the child to find
+     */
     private child(dirId: number, name: string): Inode | undefined {
         const dir = this.dirs.get(dirId);
         if (!dir) return undefined; // No such directory
@@ -116,6 +242,12 @@ export class VFS {
 
     }
 
+    /**
+     *  Open a file at the specified path with the given mode.
+     * 
+     * @param {string} path - The path to the file to open
+     * @param {FileOpenMode} mode - The mode to open the file in (read, write, or read/write)
+     */
     open(path: string, mode: FileOpenMode): number {
         const now = Date.now();
         const { target, parent } = this.resolve(path);
@@ -157,6 +289,12 @@ export class VFS {
         return fd;
     }
 
+    /**
+     * Read data from a file at the specified file descriptor.
+     * 
+     * @param {number} fd - The file descriptor of the file to read from
+     * @param {number} size - The number of bytes to read from the file
+     */
     read(fd: number, size: number): Uint8Array {
         const h = this.handles.get(fd);
         if (!h || !h.mode.includes("r")) throw new Error(`[EBADF]: Bad file descriptor: ${fd}`);
@@ -170,7 +308,13 @@ export class VFS {
 
     }
 
-    write(fd: number, buf: Uint8Array): void {
+    /**
+     * Write data to a file at the specified file descriptor.
+     * 
+     * @param fd - The file descriptor of the file to write to
+     * @param buf - The data to write to the file as a Uint8Array
+     */
+    async write(fd: number, buf: Uint8Array): Promise<void> {
         const h = this.handles.get(fd)
         if (!h || !h.mode.includes("w")) throw new Error(`[EBADF]: Bad file descriptor: ${fd}`);
 
@@ -185,16 +329,27 @@ export class VFS {
         node.payload = { file: newData }
         node.size = newLen
         node.mtime = node.atime = Date.now(); // Update modification time
+        this.markDirtyInode(node.id); // Mark inode as dirty for flushing later
+        this.flush();
         h.offset += buf.length; // Update offset
 
     }
 
+    /**
+     * Closes the given file descriptor.
+     * 
+     * @param fd - The file descriptor of the file to close
+     */
     close(fd: number): void {
         if (!this.handles.delete(fd)) throw new Error(`[EBADF]: Bad file descriptor: ${fd}`);
     }
 
-
-    mkdir(path: string): void {
+    /**
+     * Create a new directory at the specified path.
+     * 
+     * @param path - The path of the directory to create
+     */
+    async mkdir(path: string): Promise<void> {
         const { target, parent } = this.resolve(path);
         if (target) throw new Error(`[EEXIST]: Directory already exists at path: ${path}`);
 
@@ -219,8 +374,17 @@ export class VFS {
         this.dirs.set(dir.id, new Map<string, number>()); // Initialize directory entry map
         this.dirs.get(parent.id)!.set(name, dir.id); // Add to parent directory
 
+        this.markDirtyInode(dir.id); // Mark inode as dirty for flushing later
+        this.markDirtyDir(parent.id); // Mark parent directory as dirty for flushing later
+        await this.flush();
+
     }
 
+    /**
+     * Change directectory to the specified path.
+     * 
+     * @param path - The path of the directory to change to
+     */
     cd(path: string): void {
         const { target } = this.resolve(path);
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
@@ -228,6 +392,13 @@ export class VFS {
         this.cwdId = target.id; // Change current working directory to the target directory
     }
 
+
+    /**
+     * List the contents of a directory at the specified path. 
+     * If not path is provided, lists the contents of the current working directory.
+     * 
+     * @param path - [optional] The path of the directory to list 
+     */
     ls(path?: string): Array<{ name: string; type: InodeType; id: number }> {
         if (!path) path = ".";
         const { target } = this.resolve(path);
@@ -241,7 +412,6 @@ export class VFS {
                 const inode = this.getInode(id);
                 return { name, type: inode.type, id: inode.id };
             });
-
     }
 
 }
