@@ -1,3 +1,5 @@
+// FRONTEND with the help of AI (ChatGPT / Claude) [I dont want to do the frontend, want to focus on the VFS itself]
+
 import { Terminal } from '@xterm/xterm'
 import './style.css'
 
