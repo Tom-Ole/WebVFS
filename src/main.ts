@@ -2,15 +2,21 @@
 
 import { Terminal } from '@xterm/xterm'
 import './style.css'
+import { VFS } from './VFS'
+import { IndexedDbDriver } from './StorageDriver'
 
-let path = "/"
+let memoryDriver = new IndexedDbDriver()
+let vfs = await VFS.create(memoryDriver)
+
+let path = vfs.getCurrentPath()
 
 function createColoredPrompt(): string {
+  path = vfs.getCurrentPath()
   const ESC = String.fromCharCode(27) // ESC character
   return `${ESC}[31m${ESC}[1mUser: ${path} ${ESC}[97m${ESC}[0m- $ `
 }
 
-const PROMPT = createColoredPrompt()
+const PROMPT = () => createColoredPrompt()
 
 enum Commands {
   HELP = 'help',
@@ -53,7 +59,7 @@ let cursorPosition = 0 // Position within the input buffer
 
 // Print prompt
 function printPrompt() {
-  term.write(PROMPT)
+  term.write(PROMPT())
 }
 
 // Convert input string to command object with better validation
@@ -82,16 +88,16 @@ function stringToCommand(input: string): Command | null {
 // Clear current input line on terminal
 function clearInput() {
   // Clear the current input by moving cursor back and overwriting with spaces
-  const promptLength = PROMPT.length
-  term.write('\r' + ' '.repeat(promptLength + inputBuffer.length) + '\r' + PROMPT)
+  const promptLength = PROMPT().length
+  term.write('\r' + ' '.repeat(promptLength + inputBuffer.length) + '\r' + PROMPT())
   cursorPosition = 0
 }
 
 // Redraw the current input line and position cursor correctly
 function redrawInput() {
   // Move to beginning of line, clear it, write prompt and input
-  const promptLength = PROMPT.length
-  term.write('\r' + ' '.repeat(promptLength + inputBuffer.length) + '\r' + PROMPT + inputBuffer)
+  const promptLength = PROMPT().length
+  term.write('\r' + ' '.repeat(promptLength + inputBuffer.length) + '\r' + PROMPT() + inputBuffer)
   
   // Position cursor at the correct location
   const targetPosition = promptLength + cursorPosition
@@ -105,7 +111,7 @@ function redrawInput() {
 }
 
 // Handle a command object and produce output
-function handleCommand(command: Command) {
+async function handleCommand(command: Command) {
   switch (command.type) {
     case Commands.HELP:
       term.write(
@@ -135,14 +141,30 @@ function handleCommand(command: Command) {
       return // Skip the normal newline + prompt flow
 
     case Commands.LS:
-      // TODO: connect to VFS and list files
-      term.write('TODO: list files (ls) command')
+      if (command.args.length <= 1) {
+        try {
+          let list = vfs.ls(command.args[0])
+          term.write(`List of ${command.args[0] || path}:\r\n`)
+          list.forEach((entry) => {
+            term.write(`${entry.name} (${entry.type})\r\n`)
+          })
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+      } else {
+        term.write('mkdir: too many arguments')
+      }
       break
 
     case Commands.CD:
       // TODO: connect to VFS and change directory
       if (command.args.length === 1) {
-        term.write('TODO: change directory (cd) command')
+        try {
+          vfs.cd(command.args[0])
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+        break
       } else if (command.args.length === 0) {
         term.write('Usage: cd <path>')
       } else {
@@ -153,13 +175,20 @@ function handleCommand(command: Command) {
     case Commands.MKDIR:
       // TODO: connect to VFS and create directory
       if (command.args.length === 1) {
-        term.write('TODO: create directory (mkdir) command')
+        try {
+          await vfs.mkdir(command.args[0])
+          term.write(`Directory '${command.args[0]}' created successfully.`)
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
       } else if (command.args.length === 0) {
         term.write('Usage: mkdir <path>')
       } else {
         term.write('mkdir: too many arguments')
       }
       break
+
+    
 
     default:
       term.write(`Unknown command: ${command.type}`)
@@ -194,7 +223,7 @@ function handleInput(input: string) {
 }
 
 // Initialize terminal with prompt
-term.write(PROMPT)
+term.write(PROMPT())
 
 // Handle keyboard input data with improved character handling
 term.onData((data) => {

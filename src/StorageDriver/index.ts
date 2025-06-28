@@ -58,25 +58,38 @@ export class IndexedDbDriver implements StorageDriver {
     }
 
     private async getSnapshot(): Promise<SerializedFS> {
-        const inodesReq = this.db.transaction("inodes").objectStore("inodes").getAll();
-        const dirsReq = this.db.transaction("dirs").objectStore("dirs").getAll();
-
-        const [inodeArr, dirArr] = await Promise.all([
-            new Promise<Inode[]>((res, rej) => {
-                inodesReq.onsuccess = () => res(inodesReq.result as Inode[]);
-                inodesReq.onerror = () => rej(inodesReq.error);
-            }),
-            new Promise<Record<string, number>[]>((res, rej) => {
-                dirsReq.onsuccess = () => res(dirsReq.result as Record<string, number>[]);
-                dirsReq.onerror = () => rej(dirsReq.error);
-            })
-        ]);
-
         const inodes: Record<number, Inode> = {};
-        inodeArr.forEach(i => (inodes[i.id] = i));
-
         const dirs: Record<number, Record<string, number>> = {};
-        dirArr.forEach((d: any) => (dirs[d.id] = d));
+
+        // Helper to walk one store with a cursor
+        const walkStore = <T>(
+            storeName: "inodes" | "dirs",
+            target: Record<number, T>
+        ) =>
+            new Promise<void>((resolve, reject) => {
+                const cursorReq = this.db
+                    .transaction(storeName)
+                    .objectStore(storeName)
+                    .openCursor();
+
+                cursorReq.onsuccess = () => {
+                    const cur = cursorReq.result;
+                    if (cur) {
+                        target[cur.key as number] = cur.value as T;
+                        cur.continue();          // keep walking
+                    } else {
+                        resolve();               // done
+                    }
+                };
+
+                cursorReq.onerror = () => reject(cursorReq.error);
+            });
+
+        // Run both walks in parallel
+        await Promise.all([
+            walkStore<Inode>("inodes", inodes),
+            walkStore<Record<string, number>>("dirs", dirs),
+        ]);
 
         return { inodes, dirs };
     }

@@ -1,4 +1,4 @@
-import { MemoryDriver, type StorageDriver } from "../StorageDriver";
+import { IndexedDbDriver, MemoryDriver, type StorageDriver } from "../StorageDriver";
 
 
 export type InodeType = "file" | "dir" | "symlink";
@@ -36,6 +36,7 @@ export interface FileHandle {
     mode: FileOpenMode;      // Open mode: read, write, or read/write
 }
 
+export type TDriver = MemoryDriver | IndexedDbDriver;
 
 export class VFS {
 
@@ -54,9 +55,21 @@ export class VFS {
     private dirtyDirs: Set<number> = new Set(); // Set of dirty directory IDs that need to be flushed
 
 
+    getCurrentPath(): string {
+        let inode = this.getInode(this.cwdId);
+        let path = inode.name || "/";
+        while (inode.parent !== 0) { // Traverse up to root
+            inode = this.getInode(inode.parent);
+            path = `${inode.name}/${path}`;
+        }
+        return path.replace(/\/\//g, "/"); // Normalize double slashes
+    }
+
     constructor(driver: StorageDriver = new MemoryDriver()) {
         this.driver = driver;
     }
+
+    
 
     /**
      * Create a new VFS instance with an optional storage driver.
@@ -65,7 +78,7 @@ export class VFS {
      * If not provided, defaults to an in-memory driver.
      * @returns 
      */
-    static async create(driver = new MemoryDriver()) {
+    static async create(driver: TDriver = new MemoryDriver()) {
         const vfs = new VFS(driver);
         await vfs.bootstrap();
         if (!vfs.inodes.has(1)) vfs.initRoot();     // only if snapshot empty
@@ -123,6 +136,9 @@ export class VFS {
             this.inodes.set(1, root);
             this.dirs.set(1, new Map());
             this.nextInodeId = 2;
+
+            this.markDirtyInode(1);
+            this.markDirtyDir(1);
             await this.flush();                      // persist clean snapshot
         }
     }
@@ -330,7 +346,7 @@ export class VFS {
         node.size = newLen
         node.mtime = node.atime = Date.now(); // Update modification time
         this.markDirtyInode(node.id); // Mark inode as dirty for flushing later
-        this.flush();
+        await this.flush();
         h.offset += buf.length; // Update offset
 
     }
@@ -386,9 +402,16 @@ export class VFS {
      * @param path - The path of the directory to change to
      */
     cd(path: string): void {
-        const { target } = this.resolve(path);
+        const { target } = this.resolve(path) // .. resolve into {target: parent, parent: parent of parent}
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
+        if (path == "..") {
+            if (this.cwdId > 1) {
+                this.cwdId = target.id
+            }
+        }
+        if (path ===  ".") return; // No need to change if current directory
         if (target.id === 1) return; // No need to change if already at root
+        
         this.cwdId = target.id; // Change current working directory to the target directory
     }
 
@@ -400,7 +423,7 @@ export class VFS {
      * @param path - [optional] The path of the directory to list 
      */
     ls(path?: string): Array<{ name: string; type: InodeType; id: number }> {
-        if (!path) path = ".";
+        if (!path) path = this.getCurrentPath(); // Default to current working directory if no path is provided
         const { target } = this.resolve(path);
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
         const dirEntries = this.dirs.get(target.id);
