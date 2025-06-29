@@ -25,6 +25,7 @@ enum Commands {
   LS = 'ls',
   CD = 'cd',
   MKDIR = 'mkdir',
+  TOUCH = 'touch',
 }
 
 interface Command {
@@ -70,7 +71,7 @@ function stringToCommand(input: string): Command | null {
   }
 
   let cmdString = parts[0].toLowerCase()
-  
+
   // Check if command exists in enum
   const commandExists = Object.values(Commands).includes(cmdString as Commands)
   if (!commandExists) {
@@ -98,12 +99,12 @@ function redrawInput() {
   // Move to beginning of line, clear it, write prompt and input
   const promptLength = PROMPT().length
   term.write('\r' + ' '.repeat(promptLength + inputBuffer.length) + '\r' + PROMPT() + inputBuffer)
-  
+
   // Position cursor at the correct location
   const targetPosition = promptLength + cursorPosition
   const currentPosition = promptLength + inputBuffer.length
   const diff = currentPosition - targetPosition
-  
+
   if (diff > 0) {
     // Move cursor left
     term.write('\x1b[' + diff + 'D')
@@ -116,12 +117,12 @@ async function handleCommand(command: Command) {
     case Commands.HELP:
       term.write(
         'Available commands:\r\n' +
-          '  help                    Show this help message\r\n' +
-          '  echo <text>             Echo the text\r\n' +
-          '  clear                   Clear the terminal\r\n' +
-          '  ls [path]               List files in the directory (default is current)\r\n' +
-          '  cd <path>               Change directory to the specified path\r\n' +
-          '  mkdir <path>            Create a new directory at the specified path\r\n'
+        '  help                    Show this help message\r\n' +
+        '  echo <text>             Echo the text\r\n' +
+        '  clear                   Clear the terminal\r\n' +
+        '  ls [path]               List files in the directory (default is current)\r\n' +
+        '  cd <path>               Change directory to the specified path\r\n' +
+        '  mkdir <path>            Create a new directory at the specified path\r\n'
       )
       break
 
@@ -188,7 +189,20 @@ async function handleCommand(command: Command) {
       }
       break
 
-    
+    case Commands.TOUCH:
+      if (command.args.length === 1) {
+        try {
+          await vfs.touch(command.args[0])
+          term.write(`File '${command.args[0]}' created successfully.`)
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+      } else if (command.args.length === 0) {
+        term.write('Usage: touch <filename>')
+      } else {
+        term.write('touch: too many arguments')
+      }
+      break
 
     default:
       term.write(`Unknown command: ${command.type}`)

@@ -437,5 +437,42 @@ export class VFS {
             });
     }
 
+
+    /**
+     * Create a new file at the specified path.
+     * 
+     * @param path - The path of the file to create
+     */
+    async touch(path: string) {
+        const { target, parent } = this.resolve(path);
+        if (target) throw new Error(`[EEXIST]: File already exists at path: ${path}`);
+
+        const name = path.split("/").filter(Boolean).pop()!;
+        
+        const now = Date.now();
+        const fileNode: Inode = {
+            id: this.nextInodeId++,
+            type: "file",
+            name,
+            parent: parent.id,
+            mode: 0o644,
+            uid: 0,
+            gid: 0,
+            ctime: now,
+            mtime: now,
+            atime: now,
+            size: 0,
+            links: 1,
+            payload: { file: new Uint8Array() }
+        };
+
+        this.inodes.set(fileNode.id, fileNode);
+        this.dirs.get(parent.id)!.set(name, fileNode.id); // Add to parent directory
+
+        this.markDirtyInode(fileNode.id); // Mark inode as dirty for flushing later
+        this.markDirtyDir(parent.id); // Mark parent directory as dirty for flushing later
+        await this.flush();
+    }
+
 }
 
