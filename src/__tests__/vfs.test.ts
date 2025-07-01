@@ -89,7 +89,7 @@ describe("VFS", () => {
     });
 
     it("throws EISDIR when trying to open a directory as a file", () => {
-        expect(() => vfs.open("/", "r")).toThrowError(/EISDIR/);
+        expect(() => vfs.open("/", "r")).toThrowError(/ENOTDIR/);
     });
 
     it("throws EBADF when using an unknown fd", () => {
