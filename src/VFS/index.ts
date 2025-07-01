@@ -267,6 +267,8 @@ export class VFS {
     open(path: string, mode: FileOpenMode): number {
         const now = Date.now();
         const { target, parent } = this.resolve(path);
+        
+        if (!parent || parent.type !== "dir") throw new Error(`[ENOTDIR]: Not a directory: ${path}`);
 
         let fileNode: Inode;
         if (!target) {
@@ -300,7 +302,9 @@ export class VFS {
         this.handles.set(fd, { fd, inodeId: fileNode.id, offset: 0, mode }); // Create a new file handle
         fileNode.atime = now; // Update access time
 
-
+        this.markDirtyInode(fileNode.id); // Mark inode as dirty for flushing later
+        this.markDirtyDir(parent.id); // Mark parent directory as dirty for flushing later
+        this.flush(); // Flush changes to the storage driver
 
         return fd;
     }
@@ -346,9 +350,29 @@ export class VFS {
         node.size = newLen
         node.mtime = node.atime = Date.now(); // Update modification time
         this.markDirtyInode(node.id); // Mark inode as dirty for flushing later
+        this.markDirtyDir(node.parent); // Mark parent directory as dirty for flushing later
         await this.flush();
         h.offset += buf.length; // Update offset
+    }
 
+    /**
+     * Clear the buffer of the file payload
+     * 
+     * @param fd - The file descriptor of the file to clean
+     */
+    async cleanPayload(fd: number): Promise<void> {
+        const h = this.handles.get(fd);
+        if (!h || !h.mode.includes("w")) throw new Error(`[EBADF]: Bad file descriptor: ${fd}`);
+
+        const node = this.getInode(h.inodeId);
+        if (node.type !== "file") throw new Error(`[EISDIR]: Cannot clean payload of a directory`);
+
+        node.payload = { file: new Uint8Array() }; // Clear the file payload
+        node.size = 0; // Reset size
+        node.mtime = node.atime = Date.now(); // Update modification time
+        this.markDirtyInode(node.id); // Mark inode as dirty for flushing later
+        this.markDirtyDir(node.parent); // Mark parent directory as dirty for flushing later
+        await this.flush();
     }
 
     /**
@@ -472,6 +496,21 @@ export class VFS {
         this.markDirtyInode(fileNode.id); // Mark inode as dirty for flushing later
         this.markDirtyDir(parent.id); // Mark parent directory as dirty for flushing later
         await this.flush();
+    }
+
+    async cat(path: string): Promise<Uint8Array> {
+        const { target } = this.resolve(path);
+        if (!target || target.type !== "file") throw new Error(`[ENOENT]: No such file: ${path}`);
+        console.log("cat", path, target);
+        
+        const inode = this.getInode(target.id);
+        if (!inode.payload?.file) throw new Error(`[ENOENT]: File is empty: ${path}`);
+
+        inode.atime = Date.now(); // Update access time
+        this.markDirtyInode(inode.id); // Mark inode as dirty for flushing later
+        await this.flush();
+
+        return inode.payload.file; // Return the file content
     }
 
 }

@@ -26,6 +26,15 @@ enum Commands {
   CD = 'cd',
   MKDIR = 'mkdir',
   TOUCH = 'touch',
+
+  CAT = 'cat',
+  RM = 'rm',
+  RMDIR = 'rmdir',
+  MV = 'mv',
+  CP = 'cp',
+
+  VIM = 'vim',
+
 }
 
 interface Command {
@@ -201,6 +210,44 @@ async function handleCommand(command: Command) {
         term.write('Usage: touch <filename>')
       } else {
         term.write('touch: too many arguments')
+      }
+      break
+
+    case Commands.CAT:
+      if (command.args.length === 1) {
+        try {
+          const content = await vfs.cat(command.args[0])
+          const decoder = new TextDecoder()
+          term.write("> " + decoder.decode(content))
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+      } else if (command.args.length === 0) {
+        term.write('Usage: cat <filename>')
+      } else {
+        term.write('cat: too many arguments')
+      }
+      break
+
+    // My own version of VIM right now is just a placeholder
+    case Commands.VIM:
+      if (command.args.length >= 2) {
+        try {
+          const enc = new TextEncoder()
+          const path = command.args[0]
+          const content = command.args.slice(1).join(" ")
+          const fd = vfs.open(path, "rw");
+          vfs.cleanPayload(fd)
+          vfs.write(fd, enc.encode(content));
+          vfs.close(fd);
+          term.write(`File '${path}' saved successfully with content: "${content}"`)
+        } catch (error) {
+          term.write(`${error instanceof Error ? error.message : 'Unknown error'}`)
+        }
+      } else if (command.args.length < 2) {
+        term.write('Usage: vim <filename> <content>')
+      } else {
+        term.write('vim: too many arguments')
       }
       break
 
