@@ -471,7 +471,6 @@ export class VFS {
 
         const { target } = this.resolve(path);
 
-        console.log(target)
 
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
 

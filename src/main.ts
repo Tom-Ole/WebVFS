@@ -340,7 +340,7 @@ term.onData((data) => {
 // Handle arrow keys for history recall with improved navigation
 term.onKey(({ domEvent }) => {
   // Always prevent default for arrow keys to stop escape sequences
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(domEvent.key)) {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(domEvent.key)) {
     domEvent.preventDefault()
     domEvent.stopPropagation()
   }
@@ -377,6 +377,27 @@ term.onKey(({ domEvent }) => {
     if (cursorPosition < inputBuffer.length) {
       cursorPosition++
       term.write('\x1b[1C') // Move cursor right one position
+    }
+  } else if (domEvent.key === 'Tab') {
+    // Tab completion
+    const currentEntries = vfs.ls(vfs.getCurrentPath())
+    const currentWord = inputBuffer.split(' ').pop() || ''
+    const matches = currentEntries.filter(entry => entry.name.startsWith(currentWord))
+    if (matches.length > 0) {
+      // If there's only one match, complete it
+      if (matches.length === 1) {
+        const completion = matches[0].name.slice(currentWord.length)
+        inputBuffer += completion
+        cursorPosition += completion.length
+        redrawInput()
+      } else {
+        // If multiple matches, show them in a list
+        term.write('\r\nPossible completions:\r\n')
+        matches.forEach(entry => {
+          term.write(`${entry.name}\r\n`)
+        })
+        printPrompt()
+      }
     }
   }
 })
