@@ -468,10 +468,16 @@ export class VFS {
      */
     ls(path?: string): Array<{ name: string; type: InodeType; id: number }> {
         if (!path) path = this.getCurrentPath(); // Default to current working directory if no path is provided
+
         const { target } = this.resolve(path);
+
+        console.log(target)
+
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
-        const dirEntries = this.dirs.get(target.id);
-        if (!dirEntries) throw new Error(`[ENOENT]: No such directory: ${path}`);
+
+        const dirEntries = this.dirs.get(target.id); // Get the directory entries for the target directory
+
+        if (!dirEntries) return []; // If no entries, return empty array
 
         return Array.from(dirEntries.entries())
             .filter(([name]) => name !== "." && name !== "..")
