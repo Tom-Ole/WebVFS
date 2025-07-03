@@ -449,16 +449,14 @@ export class VFS {
      */
     cd(path: string): void {
         const { target } = this.resolve(path) // .. resolve into {target: parent, parent: parent of parent}
+
         if (!target || target.type !== "dir") throw new Error(`[ENOENT]: No such directory: ${path}`);
-        if (path == "..") {
-            if (this.cwdId > 1) {
-                this.cwdId = target.id
-            }
-        }
-        if (path ===  ".") return; // No need to change if current directory
-        if (target.id === 1) return; // No need to change if already at root
-        
+
+
         this.cwdId = target.id; // Change current working directory to the target directory
+        target.atime = Date.now(); // Update access time of the target directory
+        this.markDirtyInode(target.id); // Mark inode as dirty for flushing later
+        this.flush(); // Flush changes to the storage driver
     }
 
 
