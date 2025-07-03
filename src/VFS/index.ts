@@ -229,33 +229,55 @@ export class VFS {
     * Resolve a path to an inode ID 
     * 
     * @param {string} path - The path to resolve
+    * @returns {{ target?: Inode; parent: Inode }} An object containing the target inode and its parent
     */
     resolve(path: string): { target?: Inode; parent: Inode } {
         if (path === "") throw new Error("Empty path")
+        
 
-        const isAbs = path.startsWith("/");
-        let cur: Inode = this.getInode(isAbs ? 1 : this.cwdId) // Start at root or current working directory
+        // Normalize the path by removing trailing slashes
+        const normalizePath = path === "/" ? "/" : path.replace(/\/+$/, "")
 
-        const parts = path.split("/").filter(Boolean) // Split path into parts, ignoring empty segments
+        const isAbs = normalizePath.startsWith("/"); // Check if the path is absolute
+        let cur: Inode = this.getInode(isAbs ? 1 : this.cwdId) // If absolute, start from root; otherwise, start from current working directory
+        let parent: Inode = cur;
+
+        const parts = normalizePath.split("/").filter(Boolean) // Split path into parts, ignoring empty segments
+
+        if (parts.length === 0 && isAbs) {
+            const root = this.getInode(1); // If path is absolute and empty, return root inode
+            return { target: root, parent: root } // If path is empty, return current directory
+        }
+
         for (let i = 0; i < parts.length; i++) {
             const seg = parts[i]
 
             if (seg === ".") continue; // Skip current directory
             if (seg === "..") {
-                cur = this.getInode(cur.parent)! // Move to parent directory
+                if (cur.parent === 0) continue; // If at root, stay there
+                
+                parent = cur.parent !== 0 ? this.getInode(cur.parent) : this.getInode(1); // Move to parent directory
+                cur = parent
+
+                if (cur.id !== 1) {
+                    parent = cur.parent !== 0 ? this.getInode(cur.parent) : this.getInode(1); // Update parent to the parent of current directory
+                }
                 continue
             }
 
-            const child = this.child(cur.id, seg);
+            if (cur.type !== "dir") throw new Error(`[ENOTDIR]: Not a directory: ${cur.name || "/"}`); // If current inode is not a directory, throw error
+
+            const child = this.child(cur.id, seg); // Find child inode by name in the current directory
             if (!child) {
-                return { target: undefined, parent: cur }
+                return { target: undefined, parent: cur } // If child not found, return undefined target and current directory as parent
             }
 
+            parent = cur;
             cur = child
         }
 
-        return { target: cur, parent: this.getInode(cur.parent) }
 
+        return { target: cur, parent: parent }
     }
 
     /**
